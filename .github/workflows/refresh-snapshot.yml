@@ -1,0 +1,102 @@
+# Rebuilds the price snapshot and commits it, which redeploys the site.
+#
+# Runs three ways:
+#   - on a schedule, every weekday evening after NSE publishes
+#   - from the Actions tab, via "Run workflow"
+#   - from the website's Refresh button, which sends a repository_dispatch
+#
+# Before relying on the schedule, run it once by hand and confirm it succeeds.
+# GitHub's runners sit in a data centre, and NSE sometimes refuses those. If it
+# fails, see "When the runner is blocked" in the README.
+
+name: Refresh snapshot
+
+on:
+  schedule:
+    # 14:10 UTC = 19:40 IST, Monday to Friday. NSE closes at 15:30 IST and the
+    # bhav copy lands a couple of hours later. GitHub often starts scheduled
+    # runs late, which is harmless here.
+    - cron: '10 14 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Trading sessions to include'
+        required: false
+        default: '300'
+  repository_dispatch:
+    types: [refresh-snapshot]
+
+# Lets the job push the rebuilt snapshot back to the repository.
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-snapshot
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # Keeps the previous day's downloads between runs, so a normal evening
+      # refresh fetches one new session rather than three hundred.
+      - name: Restore NSE cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.nse_dashboard_cache
+          key: nse-cache-${{ github.run_id }}
+          restore-keys: nse-cache-
+
+      - name: Check NSE is reachable
+        run: |
+          python - <<'PY'
+          import sys
+          from nselib import capital_market as cm
+          from datetime import date, timedelta
+          # Walk back to the most recent day NSE published anything.
+          for back in range(1, 8):
+              d = date.today() - timedelta(days=back)
+              if d.weekday() >= 5:
+                  continue
+              try:
+                  df = cm.bhav_copy_with_delivery(trade_date=d.strftime('%d-%m-%Y'))
+                  print(f"Reached NSE. {d} returned {len(df)} rows.")
+                  sys.exit(0)
+              except FileNotFoundError:
+                  print(f"{d}: no file (holiday or weekend), trying earlier.")
+              except Exception as exc:
+                  print(f"{d}: {type(exc).__name__}: {exc}")
+          print("\nCould not reach NSE from this runner.")
+          print("See 'When the runner is blocked' in the README.")
+          sys.exit(1)
+          PY
+
+      - name: Build snapshot
+        run: |
+          cd backend
+          python -m tools.build_snapshot --days "${{ github.event.inputs.days || '300' }}"
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f data/snapshot.json.gz
+          if git diff --staged --quiet; then
+            echo "Snapshot unchanged - nothing to commit."
+          else
+            git commit -m "Refresh snapshot ($(date -u +%Y-%m-%d))"
+            git push
+            echo "Pushed. Vercel will redeploy automatically."
+          fi

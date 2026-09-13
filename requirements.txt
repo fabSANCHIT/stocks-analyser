@@ -1,0 +1,8 @@
+# Dependencies for the hosted (Vercel) deployment.
+# nselib is deliberately absent: the hosted app uses the Yahoo provider, and
+# leaving it out keeps the serverless bundle smaller.
+fastapi==0.115.6
+pydantic==2.10.4
+pandas>=2.0.0
+numpy>=1.24.0
+yfinance>=1.7.0

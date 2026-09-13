@@ -1,0 +1,13 @@
+# Local development: both providers available.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Yahoo Finance provider (default). Works locally and on cloud hosts.
+yfinance>=1.7.0
+
+# NSE archive provider. Optional - only used with DATA_PROVIDER=nse, and only
+# works from a connection NSE will answer.
+nselib>=2.5.1
